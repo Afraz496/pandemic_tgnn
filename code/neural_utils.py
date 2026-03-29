@@ -33,7 +33,7 @@ def train(model: torch.nn.Module ,
     optimizer.zero_grad()
     output = model(adj, features)
     loss_train = F.mse_loss(output, y)
-    loss_train.backward(retain_graph=True)
+    loss_train.backward()
     optimizer.step()
     return output, loss_train
 
@@ -56,8 +56,9 @@ def test(model: torch.nn.Module,
     output (torch.Tensor): Output predictions of the model
     loss_test (torch.Tensor): Loss of the model
     """    
-    output = model(adj, features)
-    loss_test = F.mse_loss(output, y)
+    with torch.no_grad():
+        output = model(adj, features)
+        loss_test = F.mse_loss(output, y)
     return output, loss_test
 
 
@@ -132,78 +133,84 @@ def run_neural_model(model: str,
 
 
     #-------------------- Training
-    n_train_batches = ceil(len(idx_train)/batch_size)
-    stop = False
-    while(not stop):
-        if(model=="LSTM"):
+    model_name = model
+    n_train_batches = ceil(len(idx_train) / batch_size)
 
-            model = LSTM(nfeat=lstm_features, nhid=hidden, n_nodes=n_nodes, window=window, 
-                            dropout=dropout,batch_size = batch_size, recur=recur).to(device)
+    if model_name == "LSTM":
+        model = LSTM(
+            nfeat=lstm_features,
+            nhid=hidden,
+            n_nodes=n_nodes,
+            window=window,
+            batch_size=batch_size,
+            recur=recur,
+        ).to(device)
 
-        elif(model=="MPNN_LSTM"):
+    elif model_name == "MPNN_LSTM":
+        model = MPNN_LSTM(
+            nfeat=nfeat,
+            nhid=hidden,
+            nout=1,
+            n_nodes=n_nodes,
+            window=graph_window,
+            dropout=dropout,
+        ).to(device)
 
-            model = MPNN_LSTM(nfeat=nfeat, nhid=hidden, nout=1, 
-                              n_nodes=n_nodes, window=graph_window, dropout=dropout).to(device)
+    elif model_name == "MPNN":
+        model = MPNN(nfeat=nfeat, nhid=hidden, nout=1, dropout=dropout).to(device)
 
-        elif(model=="MPNN"):
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=10)
 
-            model = MPNN(nfeat=nfeat, nhid=hidden, nout=1, dropout=dropout).to(device)
+    #------------------- Train
+    best_val_acc = 1e8
+    val_among_epochs = []
+    train_among_epochs = []
 
-        optimizer = optim.Adam(model.parameters(), lr=lr)
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=10)
+    for epoch in range(epochs):
+        start = time.time()
 
-        #------------------- Train
-        best_val_acc= 1e8
-        val_among_epochs = []
-        train_among_epochs = []
+        model.train()
+        train_loss = AverageMeter()
 
-        for epoch in range(epochs):    
-            start = time.time()
+        # Train for one epoch
+        for batch in range(n_train_batches):
+            output, loss = train(model, optimizer, adj_train[batch], features_train[batch], y_train[batch])
+            train_loss.update(loss.data.item(), output.size(0))
 
-            model.train()
-            train_loss = AverageMeter()
+        # Evaluate on validation set
+        model.eval()
 
-            # Train for one epoch
-            for batch in range(n_train_batches):
-                output, loss = train(model, optimizer, adj_train[batch], features_train[batch], y_train[batch])
-                train_loss.update(loss.data.item(), output.size(0))
+        output, val_loss = test(model, adj_val[0], features_val[0], y_val[0])
+        val_loss = float(val_loss.detach().cpu().numpy())
 
-            # Evaluate on validation set
-            model.eval()
+        # Print results
+        if(epoch%print_epoch==0):
+            print("Epoch:", '%03d' % (epoch + 1), "train_loss=", "{:.5f}".format(train_loss.avg),"val_loss=", "{:.5f}".format(val_loss), "time=", "{:.5f}".format(time.time() - start))
 
-            output, val_loss = test(model, adj_val[0], features_val[0], y_val[0])
-            val_loss = float(val_loss.detach().cpu().numpy())
+        train_among_epochs.append(train_loss.avg)
+        val_among_epochs.append(val_loss)
 
-            # Print results
-            if(epoch%print_epoch==0):
-                print("Epoch:", '%03d' % (epoch + 1), "train_loss=", "{:.5f}".format(train_loss.avg),"val_loss=", "{:.5f}".format(val_loss), "time=", "{:.5f}".format(time.time() - start))
+        # check if the model is stuck
+        if(epoch<30 and epoch>10):
+            if(len(set([round(val_e) for val_e in val_among_epochs[-20:]])) == 1 ):
+                print("Break becuase it s stuck")
+                break
 
-            train_among_epochs.append(train_loss.avg)
-            val_among_epochs.append(val_loss)
+        if( epoch>early_stop):
+            if(len(set([round(val_e) for val_e in val_among_epochs[-int(early_stop/2):]])) == 1):
+                print("Break early stop")
+                break
 
-            # check if the model is stuck
-            if(epoch<30 and epoch>10):
-                if(len(set([round(val_e) for val_e in val_among_epochs[-20:]])) == 1 ):
-                    #stuck= True
-                    print("Break becuase it s stuck")
-                    stop = True
-                    break
+        #--------- Remember best accuracy and save checkpoint
+        if val_loss < best_val_acc:
+            best_val_acc = val_loss
+            torch.save({
+                'state_dict': model.state_dict(),
+                'optimizer' : optimizer.state_dict(),
+            }, 'model_best.pth.tar')
 
-            if( epoch>early_stop):
-                if(len(set([round(val_e) for val_e in val_among_epochs[-int(early_stop/2):]])) == 1):#
-                    print("Break early stop")
-                    stop = True
-                    break
-
-            #--------- Remember best accuracy and save checkpoint
-            if val_loss < best_val_acc:
-                best_val_acc = val_loss
-                torch.save({
-                    'state_dict': model.state_dict(),
-                    'optimizer' : optimizer.state_dict(),
-                }, 'model_best.pth.tar')
-
-            scheduler.step(val_loss)
+        scheduler.step(val_loss)
 
 
     #---------------- Testing
@@ -214,7 +221,7 @@ def run_neural_model(model: str,
 
     output, loss = test(model,adj_test[0], features_test[0], y_test[0])
 
-    if(model=="LSTM"):
+    if(model_name=="LSTM"):
         o = output.view(-1).cpu().detach().numpy()
         l = y_test[0].view(-1).cpu().numpy()
     else:
