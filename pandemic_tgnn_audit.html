@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>pandemic_tgnn — Safety & Scalability Audit</title>
+<style>
+  :root {
+    --bg: #f8f7f4;
+    --bg2: #ffffff;
+    --text: #1a1a18;
+    --text2: #5f5e5a;
+    --border: rgba(0,0,0,0.10);
+    --red50: #fcebeb; --red600: #a32d2d; --red800: #791f1f;
+    --amber50: #faeeda; --amber600: #854f0b; --amber800: #633806;
+    --amber400: #ba7517;
+    --green50: #eaf3de; --green600: #3b6d11; --green800: #27500a;
+    --blue50: #e6f1fb; --blue600: #185fa5; --blue800: #0c447c;
+    --gray50: #f1efe8; --gray600: #5f5e5a; --gray800: #444441;
+    --purple50: #eeedfe; --purple600: #534ab7; --purple800: #3c3489;
+    --teal50: #e1f5ee; --teal600: #0f6e56; --teal800: #085041;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1a1a18; --bg2: #252523; --text: #e8e6de; --text2: #9c9a92; --border: rgba(255,255,255,0.10);
+      --red50: #501313; --red600: #f09595; --red800: #f7c1c1;
+      --amber50: #412402; --amber600: #ef9f27; --amber800: #fac775;
+      --green50: #173404; --green600: #97c459; --green800: #c0dd97;
+      --blue50: #042c53; --blue600: #85b7eb; --blue800: #b5d4f4;
+      --gray50: #2c2c2a; --gray600: #b4b2a9; --gray800: #d3d1c7;
+      --purple50: #26215c; --purple600: #afa9ec; --purple800: #cecbf6;
+      --teal50: #04342c; --teal600: #5dcaa5; --teal800: #9fe1cb;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); font-size: 15px; line-height: 1.7; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 40px 24px 80px; }
+  h1 { font-size: 26px; font-weight: 600; margin-bottom: 6px; }
+  .subtitle { color: var(--text2); font-size: 14px; margin-bottom: 36px; }
+  h2 { font-size: 18px; font-weight: 600; margin: 48px 0 16px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+  h3 { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+
+  /* severity badges */
+  .badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; letter-spacing: .4px; text-transform: uppercase; }
+  .badge-critical { background: var(--red50); color: var(--red800); }
+  .badge-high     { background: var(--amber50); color: var(--amber800); }
+  .badge-medium   { background: var(--blue50); color: var(--blue800); }
+  .badge-low      { background: var(--green50); color: var(--green800); }
+  .badge-info     { background: var(--gray50); color: var(--gray800); }
+
+  /* issue card */
+  .issue { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 16px; overflow: hidden; }
+  .issue-header { display: flex; align-items: flex-start; gap: 12px; padding: 14px 18px 10px; cursor: pointer; user-select: none; }
+  .issue-header:hover { background: var(--bg); }
+  .issue-num { font-size: 12px; color: var(--text2); min-width: 22px; padding-top: 2px; }
+  .issue-title-wrap { flex: 1; }
+  .issue-title { font-weight: 500; }
+  .issue-loc { font-size: 12px; color: var(--text2); font-family: monospace; margin-top: 2px; }
+  .chevron { color: var(--text2); transition: transform .2s; font-size: 14px; padding-top: 3px; }
+  .issue.open .chevron { transform: rotate(90deg); }
+  .issue-body { display: none; padding: 0 18px 16px 52px; }
+  .issue.open .issue-body { display: block; }
+
+  .section-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .6px; color: var(--text2); margin: 12px 0 4px; }
+  .explain { font-size: 14px; line-height: 1.65; color: var(--text); margin-bottom: 10px; }
+  .fix { background: var(--green50); color: var(--green800); border-radius: 8px; padding: 10px 14px; font-size: 13px; line-height: 1.6; }
+  code { font-family: monospace; font-size: 13px; background: var(--bg); padding: 1px 5px; border-radius: 4px; }
+  pre { background: var(--gray50); color: var(--text); border-radius: 8px; padding: 12px 14px; font-size: 12.5px; line-height: 1.55; overflow-x: auto; margin: 8px 0; }
+
+  /* top 10 ranking table */
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th { text-align: left; padding: 8px 12px; background: var(--gray50); color: var(--text2); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .4px; }
+  td { padding: 9px 12px; border-top: 1px solid var(--border); vertical-align: top; }
+  tr:hover td { background: var(--bg); }
+  .rank { font-weight: 700; color: var(--text2); }
+
+  /* cost risk bar */
+  .cost-bar-wrap { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; margin-bottom: 12px; }
+  .cost-row { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+  .cost-label { font-size: 13px; min-width: 160px; }
+  .bar-track { flex: 1; background: var(--gray50); height: 10px; border-radius: 5px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 5px; }
+  .cost-pct { font-size: 12px; color: var(--text2); min-width: 36px; text-align: right; }
+
+  .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 12px; }
+  .summary-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; }
+  .summary-card .num { font-size: 28px; font-weight: 700; }
+  .summary-card .lbl { font-size: 12px; color: var(--text2); margin-top: 2px; }
+
+  .tag-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .tag { font-size: 12px; padding: 2px 10px; border-radius: 99px; background: var(--gray50); color: var(--gray800); border: 1px solid var(--border); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>pandemic_tgnn — Safety &amp; Scalability Audit</h1>
+<div class="subtitle">Full code review · 8 source files · Generated May 2026</div>
+
+<div class="summary-grid">
+  <div class="summary-card"><div class="num" style="color:var(--red600)">4</div><div class="lbl">Critical issues</div></div>
+  <div class="summary-card"><div class="num" style="color:var(--amber400)">7</div><div class="lbl">High issues</div></div>
+  <div class="summary-card"><div class="num" style="color:var(--blue600)">6</div><div class="lbl">Medium issues</div></div>
+  <div class="summary-card"><div class="num" style="color:var(--green600)">4</div><div class="lbl">Low / info</div></div>
+</div>
+
+<!-- ─────────────────────────────── ISSUES ─────────────────────────────── -->
+<h2>Identified Issues</h2>
+<p style="font-size:13px;color:var(--text2);margin-bottom:16px;">Click any issue to expand explanation and proposed fix.</p>
+
+<!-- ── CRITICAL ── -->
+
+<div class="issue" id="i1">
+  <div class="issue-header" onclick="toggle('i1')">
+    <span class="issue-num">1</span>
+    <div class="issue-title-wrap">
+      <div class="issue-title"><span class="badge badge-critical">Critical</span> &nbsp;Unbounded <code>while(not stop)</code> loop — can run forever</div>
+      <div class="issue-loc">metalearn.py · lines 131–190 &nbsp;|&nbsp; tl_base.py · lines 131–185</div>
+    </div>
+    <span class="chevron">▶</span>
+  </div>
+  <div class="issue-body">
+    <div class="section-label">Explanation</div>
+    <div class="explain">Both <code>metalearn.py</code> and <code>tl_base.py</code> wrap the entire training loop in <code>while(not stop)</code>. The variable <code>stuck</code> is set to <code>True</code> when loss plateaus before epoch 30, which resets <code>stop = False</code> and causes the while-loop to re-enter and retrain from scratch. If the model is pathologically stuck (e.g., exploding gradients, all-zero data, wrong lr), <code>stuck</code> fires every single restart and the loop never exits. There is no maximum restart counter. On a GPU instance this burns quota indefinitely.</div>
+    <div class="section-label">Proposed fix</div>
+    <div class="fix">Add a <code>max_restarts</code> guard and break unconditionally after it:<pre>max_restarts = 3
+restart_count = 0
+while not stop:
+    restart_count += 1
+    if restart_count > max_restarts:
+        print("Exceeded max restarts — forcing exit")
+        stop = True
+        break
+    ...</pre>Also log each restart with a timestamp so cloud billing spikes are visible.</div>
+  </div>
+</div>
+
+<div class="issue" id="i2">
+  <div class="issue-header" onclick="toggle('i2')">
+    <span class="issue-num">2</span>
+    <div class="issue-title-wrap">
+      <div class="issue-title"><span class="badge badge-critical">Critical</span> &nbsp;<code>retain_graph=True</code> permanently leaks the entire computation graph</div>
+      <div class="issue-loc">metalearn.py · line 27 &nbsp;|&nbsp; tl_base.py · line 27</div>
+    </div>
+    <span class="chevron">▶</span>
+  </div>
+  <div class="issue-body">
+    <div class="section-label">Explanation</div>
+    <div class="explain"><code>loss_train.backward(retain_graph=True)</code> tells PyTorch never to free the intermediate activations stored during the forward pass. Every call to <code>train()</code> therefore leaks the full computation graph — all activations for every node in every batch remain pinned in GPU memory. The training loop calls <code>train()</code> hundreds of times per epoch, causing GPU memory to grow monotonically until OOM. On a CPU instance it will eventually swap-kill the process. This is the most dangerous single line in the repository.</div>
+    <div class="section-label">Proposed fix</div>
+    <div class="fix">Remove <code>retain_graph=True</code>. It is only needed for exotic second-order gradient tricks (MAML-style), and the current code does not use the graph after <code>backward()</code>:<pre>loss_train.backward()  # not retain_graph=True</pre>The MAML-style gradient accumulation in <code>metalearn.py</code> manually reads <code>.grad.clone()</code> after the step, which is safe without retaining the graph.</div>
+  </div>
+</div>
+
+<div class="issue" id="i3">
+  <div class="issue-header" onclick="toggle('i3')">
+    <span class="issue-num">3</span>
+    <div class="issue-title-wrap">
+      <div class="issue-title"><span class="badge badge-critical">Critical</span> &nbsp;Model retrained from scratch at every test sample — O(N²) GPU calls</div>
+      <div class="issue-loc">main.py · lines 57–90 &nbsp;|&nbsp; metalearn.py · lines 124–195</div>
+    </div>
+    <span class="chevron">▶</span>
+  </div>
+  <div class="issue-body">
+    <div class="section-label">Explanation</div>
+    <div class="explain">The outer loop is <code>for shift in range(1, ahead)</code> (13 iterations) and the inner loop is <code>for test_sample in range(start_exp, n_samples - shift)</code> (~35–60 iterations per country). For each <code>(shift, test_sample)</code> pair, <code>run_neural_model()</code> trains a brand-new model for up to <code>epochs=300</code>. That gives roughly <strong>13 × 50 × 300 × 4 countries = 780,000 epoch-level forward-backward passes</strong>. GPU instance time compounds fast. Nothing is cached between adjacent test samples even though each differs by only a single data point.</div>
+    <div class="section-label">Proposed fix</div>
+    <div class="fix">Use warm-starting: save the checkpoint from <code>test_sample=T</code> and load it for <code>test_sample=T+1</code> as the initial weights. Reduce <code>epochs</code> for warm restarts (e.g. 50 instead of 300). Add a dedicated CLI flag <code>--warm-start</code> so the behaviour is explicit. For metalearn, the eta checkpoint already exists — use it as the starting point for all test samples, not only the first.</div>
+  </div>
+</div>
+
+<div class="issue" id="i4">
+  <div class="issue-header" onclick="toggle('i4')">
+    <span class="issue-num">4</span>
+    <div class="issue-title-wrap">
+      <div class="issue-title"><span class="badge badge-critical">Critical</span> &nbsp;LSTM cell state hardcoded to <code>batch_size</code> and pinned to CUDA at init</div>
+      <div class="issue-loc">models.py · lines 193–196</div>
+    </div>
+    <span class="chevron">▶</span>
+  </div>
+  <div class="issue-body">
+    <div class="section-label">Explanation</div>
+    <div class="explain"><code>self.cell</code> is an <code>nn.Parameter</code> initialized at construction time with shape <code>(nb_layers, batch_size, nhid)</code> and immediately moved to CUDA via <code>.cuda()</code>. This hardwires the batch size into the model's parameters. When the final batch is smaller than <code>batch_size</code> (almost always — total samples rarely divide evenly), the forward pass hits a shape mismatch and falls into the bare <code>except</code> block with a silent slice. The explicit <code>.cuda()</code> also crashes on CPU-only machines (the Dockerfile installs the CPU-only PyTorch build).</div>
+    <div class="section-label">Proposed fix</div>
+    <div class="fix">Remove the stateful cell parameter. Pass zero initial states at each forward call, respecting the actual batch dimension:<pre>def forward(self, adj, features):
+    features = features.view(self.window, -1, self.n_nodes)
+    bsz = features.size(1)
+    h0 = torch.zeros(self.nb_layers, bsz, self.nhid, device=features.device)
+    c0 = torch.zeros(self.nb_layers, bsz, self.nhid, device=features.device)
+    lstm_out, _ = self.lstm(features, (h0, c0))
+    return self.linear(lstm_out[-1]).view(-1)</pre>This also removes the <code>try/except</code> catch-all and the bare <code>.cuda()</code> call.</div>
+  </div>
+</div>
+
+<!-- ── HIGH ── -->
+
+<div class="issue" id="i5">
+  <div class="issue-header" onclick="toggle('i5')">
+    <span class="issue-num">5</span>
+    <div class="issue-title-wrap">
+      <div class="issue-title"><span class="badge badge-high">High</span> &nbsp;All batches materialized into GPU memory before training begins</div>
+      <div class="issue-loc">neural_utils.py · lines 78–100 &nbsp;|&nbsp; preprocess.py · lines 63–130</div>
+    </div>
+    <span class="chevron">▶</span>
+  </div>
+  <div class="issue-body">
+    <div class="section-label">Explanation</div>
+    <div class="explain"><code>generate_batches()</code> builds every batch tensor and <code>.to(device)</code>s all of them upfront. With MPNN_LSTM and graph_window=7, each batch element stacks 7 adjacency matrices and feature blocks. The full pre-allocated list can reach several hundred MB on GPU before training starts, and it is rebuilt fresh for every <code>(shift, test_sample)</code> pair — so this allocation/deallocation happens tens of thousands of times during a full run.</div>
+    <div class="section-label">Proposed fix</div>
+    <div class="fix">Implement lazy batch generation: keep indices only, move tensors to device inside the training loop per batch. Or use a <code>torch.utils.data.Dataset</code> with <code>pin_memory=True</code> for async host→device transfers. At minimum, call <code>del adj_train, features_train, y_train; torch.cuda.empty_cache()</code> at the end of each <code>run_neural_model</code> call.</div>
+  </div>
+</div>
+
+<div class="issue" id="i6">
+  <div class="issue-header" onclick="toggle('i6')">
+    <span class="issue-num">6</span>
+    <div class="issue-title-wrap">
+      <div class="issue-title"><span class="badge badge-high">High</span> &nbsp;Early stopping uses integer rounding — can never fire on float losses</div>
+      <div class="issue-loc">metalearn.py · line 170 &nbsp;|&nbsp; tl_base.py · lines 155, 185</div>
+    </div>
+    <span class="chevron">▶</span>
+  </div>
+  <div class="issue-body">
+    <div class="section-label">Explanation</div>
+    <div class="explain">The early-stop check is <code>len(set([round(val_e) for val_e in val_among_epochs[-50:]])) == 1</code>. Because <code>val_loss</code> is cast to <code>int</code> (line 165: <code>val_loss = int(...)</code>), any validation loss between 0 and 1 always rounds to 0 or 1. When loss converges at, say, 0.3 the set is <code>{0}</code> and early stop fires instantly after 1 epoch. When loss oscillates between 0.3 and 0.9 the set is still <code>{0}</code> so early stop fires despite active learning. The early-stop logic is effectively broken for the expected loss range of this task (normalized case counts, typically &lt;1).</div>
+    <div class="section-label">Proposed fix</div>
+    <div class="fix">Remove the <code>int()</code> cast; store the float. Compare improvement delta instead of set cardinality:<pre>PATIENCE = 50
+best_val = float('inf')
+patience_counter = 0
+for epoch in range(epochs):
+    ...
+    if val_loss < best_val - 1e-4:
+        best_val = val_loss
+        patience_counter = 0
+        torch.save(...)
+    else:
+        patience_counter += 1
+    if patience_counter >= PATIENCE:
+        break</pre></div>
+  </div>
+</div>
+
+<div class="issue" id="i7">
+  <div class="issue-header" onclick="toggle('i7')">
+    <span class="issue-num">7</span>
+    <div class="issue-title-wrap">
+      <div class="issue-title"><span class="badge badge-high">High</span> &nbsp;<code>nx.adjacency_matrix().toarray()</code> called inside data loading — full dense N×N allocation per timestep</div>
+      <div class="issue-loc">preprocess.py · lines 247, 268, 291, 316</div>
+    </div>
+    <span class="chevron">▶</span>
+  </div>
+  <div class="issue-body">
+    <div class="section-label">Explanation</div>
+    <div class="explain"><code>gs_adj = [nx.adjacency_matrix(kgs).toarray().T for kgs in Gs]</code> converts every graph to a dense NumPy array. For England (~150 NUTS-3 regions) this is a 150×150 float64 matrix per day × ~60 days = 1,350 dense matrices of 180 KB each. This is not catastrophic for current data, but it creates an O(N²) memory footprint per country per run and defeats any sparsity the mobility graphs might have. It also blocks GCNConv's native sparse path.</div>
+    <div class="section-label">Proposed fix</div>
+    <div class="fix">Keep the adjacency as a sparse scipy matrix or convert directly to a torch sparse tensor. The downstream <code>generate_batches</code> call already uses <code>sparse_mx_to_torch_sparse_tensor()</code>:<pre>from preprocess import sparse_mx_to_torch_sparse_tensor
+gs_adj = [sparse_mx_to_torch_sparse_tensor(
+              nx.adjacency_matrix(kgs).T.astype('float32'))
+          for kgs in Gs]</pre>Then pass these tensors directly; remove the intermediate <code>sp.block_diag(adj_tmp)</code> conversion in <code>generate_batches</code>.</div>
+  </div>
+</div>
+
+<div class="issue" id="i8">
+  <div class="issue-header" onclick="toggle('i8')">
+    <span class="issue-num">8</span>
+    <div class="issue-title-wrap">
+      <div class="issue-title"><span class="badge badge-high">High</span> &nbsp;LSTM validation uses <em>training</em> indices, not validation indices</div>
+      <div class="issue-loc">neural_utils.py · lines 78–81</div>
+    </div>
+    <span class="chevron">▶</span>
+  </div>
+  <div class="issue-body">
+    <div class="section-label">Explanation</div>
+    <div class="explain">For the LSTM model, <code>adj_val, features_val, y_val = generate_batches_lstm(n_nodes, y, idx_train, ...)</code> is called with <code>idx_train</code> instead of <code>idx_val</code>. The validation loss therefore measures training error. Early stopping never fires because it is watching the wrong set, causing the LSTM to always run all <code>epochs=300</code> epochs regardless of convergence.</div>
+    <div class="section-label">Proposed fix</div>
+    <div class="fix"><pre>adj_val, features_val, y_val = generate_batches_lstm(
+    n_nodes, y, idx_val,  # ← was idx_train
+    window, shift, batch_size, device, test_sample
+)</pre></div>
+  </div>
+</div>
+
+<div class="issue" id="i9">
+  <div class="issue-header" onclick="toggle('i9')">
+    <span class="issue-num">9</span>
+    <div class="issue-title-wrap">
+      <div class="issue-title"><span class="badge badge-high">High</span> &nbsp;ARIMA trained per-region per-timestep — O(regions × timesteps) model fits</div>
+      <div class="issue-loc">models.py · lines 46–67</div>
+    </div>
+    <span class="chevron">▶</span>
+  </div>
+  <div class="issue-body">
+    <div class="section-label">Explanation</div>
+    <div class="explain">The <code>arima()</code> function iterates over every region (<code>labels.shape[0]</code>, ~100–150) for every test sample (~50), fitting a fresh <code>ARIMA(1,0,0)</code> via MLE at each step. That is 7,500+ statsmodels ARIMA fits per country. Each fit is slow (seconds on CPU). On 4 countries this is the dominant wall-clock cost — likely 30–60 min on a CPU instance.</div>
+    <div class="section-label">Proposed fix</div>
+    <div class="fix">Vectorize with <code>statsmodels.tsa.statespace.varmax</code> or batch with <code>pmdarima</code> pipelines. Alternatively, precompute all ARIMA forecasts in a single sweep and cache them to disk before the neural model loop begins. AR(1) also has a closed-form OLS estimate that runs in microseconds per region.</div>
+  </div>
+</div>
+
+<div class="issue" id="i10">
+  <div class="issue-header" onclick="toggle('i10')">
+    <span class="issue-num">10</span>
+    <div class="issue-title-wrap">
+      <div class="issue-title"><span class="badge badge-high">High</span> &nbsp;<code>generate_graphs</code> reads one CSV per date from disk in a tight loop</div>
+      <div class="issue-loc">preprocess.py · lines 360–375</div>
+    </div>
+    <span class="chevron">▶</span>
+  </div>
+  <div class="issue-body">
+    <div class="section-label">Explanation</div>
+    <div class="explain">Each call to <code>generate_graphs(dates, country)</code> opens and parses one CSV file per date — up to 63 files per country, 252 total. Each file is read via <code>pd.read_csv</code> and parsed into a NetworkX DiGraph by iterating row-by-row with <code>d.iterrows()</code>, which is notoriously slow. This function is called once at startup, but <code>iterrows()</code> on even a 1,000-edge graph can take seconds per graph.</div>
+    <div class="section-label">Proposed fix</div>
+    <div class="fix">Replace <code>iterrows()</code> with vectorized edge loading:<pre>for date in dates:
+    d = pd.read_csv(f"graphs/{country}_{date}.csv", header=None,
+                    names=['src','dst','w'])
+    G = nx.from_pandas_edgelist(d, 'src', 'dst', 'w',
+                                 create_using=nx.DiGraph())</pre>Also consider pre-serializing all graphs to a single <code>pickle</code> or <code>npz</code> file per country to avoid repeated CSV parsing across runs.</div>
+  </div>
+</div>
+
+<div class="issue" id="i11">
+  <div class="issue-header" onclick="toggle('i11')">
+    <span class="issue-num">11</span>
+    <div class="issue-title-wrap">
+      <div class="issue-title"><span class="badge badge-high">High</span> &nbsp;<code>train.py</code> calls <code>run_training()</code> as a subprocess — duplicates process startup overhead per run</div>
+      <div class="issue-loc">train.py · line 45</div>
+    </div>
+    <span class="chevron">▶</span>
+  </div>
+  <div class="issue-body">
+    <div class="section-label">Explanation</div>
+    <div class="explain"><code>train.py</code> spawns <code>main.py</code> via <code>subprocess.run(["python", "main.py", ...])</code>. This means environment initialisation, CUDA context setup, and all data loading happen in a child process that is thrown away after one run. If the cloud job scheduler retries on OOM or failure, the entire pipeline re-downloads data and restarts from scratch with no checkpointing of intermediate per-country results.</div>
+    <div class="section-label">Proposed fix</div>
+    <div class="fix">Import and call <code>experiment()</code> directly from <code>train.py</code>, or use Python's <code>multiprocessing</code> if isolation is needed. Add per-country result caching: if <code>results/results_{country}.csv</code> already exists and is non-empty, skip that country.</div>
+  </div>
+</div>
+
+<!-- ── MEDIUM ── -->
+
+<div class="issue" id="i12">
+  <div class="issue-header" onclick="toggle('i12')">
+    <span class="issue-num">12</span>
+    <div class="issue-title-wrap">
+      <div class="issue-title"><span class="badge badge-medium">Medium</span> &nbsp;No gradient clipping — training instability risk</div>
+      <div class="issue-loc">neural_utils.py · line 21 &nbsp;|&nbsp; metalearn.py · line 24</div>
+    </div>
+    <span class="chevron">▶</span>
+  </div>
+  <div class="issue-body">
+    <div class="section-label">Explanation</div>
+    <div class="explain">The MPNN_LSTM model stacks two GCNConv layers feeding two stacked LSTMs. This architecture is prone to exploding gradients through the temporal dimension, especially with sparse mobility graphs where some nodes have very high degree. No gradient clipping is applied before <code>optimizer.step()</code>.</div>
+    <div class="section-label">Proposed fix</div>
+    <div class="fix"><pre>loss_train.backward()
+torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+optimizer.step()</pre></div>
+  </div>
+</div>
+
+<div class="issue" id="i13">
+  <div class="issue-header" onclick="toggle('i13')">
+    <span class="issue-num">13</span>
+    <div class="issue-title-wrap">
+      <div class="issue-title"><span class="badge badge-medium">Medium</span> &nbsp;<code>val_among_epochs</code> grows without bound — accumulates all epoch losses</div>
+      <div class="issue-loc">neural_utils.py · line 165 &nbsp;|&nbsp; metalearn.py · line 166</div>
+    </div>
+    <span class="chevron">▶</span>
+  </div>
+  <div class="issue-body">
+    <div class="section-label">Explanation</div>
+    <div class="explain"><code>val_among_epochs.append(val_loss)</code> accumulates every epoch's validation loss in a Python list that is never pruned. Over 300 epochs × 650 <code>(shift, test_sample)</code> pairs per country, this creates 195,000-element lists per country. The list is also used in a <code>set()</code> conversion inside the epoch loop, which is O(early_stop/2) work per epoch — a hidden O(epochs²) term.</div>
+    <div class="section-label">Proposed fix</div>
+    <div class="fix">Use a <code>collections.deque(maxlen=early_stop)</code> instead of a list. The early-stop check then becomes O(1):<pre>from collections import deque
+val_window = deque(maxlen=early_stop)
+val_window.append(val_loss)
+if len(val_window) == early_stop and len(set(round(v,2) for v in val_window)) == 1:
+    break</pre></div>
+  </div>
+</div>
+
+<div class="issue" id="i14">
+  <div class="issue-header" onclick="toggle('i14')">
+    <span class="issue-num">14</span>
+    <div class="issue-title-wrap">
+      <div class="issue-title"><span class="badge badge-medium">Medium</span> &nbsp;<code>os.chdir()</code> used for data navigation — not thread-safe, side-effect on process</div>
+      <div class="issue-loc">preprocess.py · lines 227–320</div>
+    </div>
+    <span class="chevron">▶</span>
+  </div>
+  <div class="issue-body">
+    <div class="section-label">Explanation</div>
+    <div class="explain"><code>read_meta_datasets()</code> navigates the filesystem by calling <code>os.chdir("../Italy")</code>, <code>os.chdir("../Spain")</code> etc. This mutates the process-wide working directory. If any exception is raised mid-function, the process is left in an unexpected directory. Any concurrent access (e.g., multiprocessing) will race on the cwd. The code relies on restoring cwd at the end with <code>os.chdir("../../code")</code> which is fragile.</div>
+    <div class="section-label">Proposed fix</div>
+    <div class="fix">Pass absolute paths throughout and use <code>pathlib.Path</code>:<pre>data_root = Path(__file__).parent.parent / "data"
+for country_dir in [data_root / c for c in config['countries']]:
+    labels = pd.read_csv(country_dir / label_file)
+    graphs = generate_graphs(dates, country, graph_dir=country_dir / "graphs")</pre></div>
+  </div>
+</div>
+
+<div class="issue" id="i15">
+  <div class="issue-header" onclick="toggle('i15')">
+    <span class="issue-num">15</span>
+    <div class="issue-title-wrap">
+      <div class="issue-title"><span class="badge badge-medium">Medium</span> &nbsp;Checkpoint saved on every improvement — excessive disk I/O during training</div>
+      <div class="issue-loc">neural_utils.py · lines 175–179 &nbsp;|&nbsp; metalearn.py · lines 185–193</div>
+    </div>
+    <span class="chevron">▶</span>
+  </div>
+  <div class="issue-body">
+    <div class="section-label">Explanation</div>
+    <div class="explain">The checkpoint <code>model_best.pth.tar</code> is written to disk every epoch the validation loss improves. For early training (where loss decreases nearly every epoch), this means ~100 torch.save() calls per <code>(shift, test_sample)</code> pair. At ~180 KB per checkpoint × 650 pairs × 4 countries this is ~47 GB of total write amplification per run, which on GCS-backed volumes adds measurable cost and latency.</div>
+    <div class="section-label">Proposed fix</div>
+    <div class="fix">Keep the best state dict in CPU RAM and save to disk only at the end of training:<pre>best_state = None
+if val_loss < best_val_acc:
+    best_val_acc = val_loss
+    best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+# After loop:
+torch.save({'state_dict': best_state}, 'model_best.pth.tar')</pre></div>
+  </div>
+</div>
+
+<div class="issue" id="i16">
+  <div class="issue-header" onclick="toggle('i16')">
+    <span class="issue-num">16</span>
+    <div class="issue-title-wrap">
+      <div class="issue-title"><span class="badge badge-medium">Medium</span> &nbsp;<code>BUCKET_NAME</code> read at module load without fallback — crashes entire container on missing env var</div>
+      <div class="issue-loc">train.py · line 11</div>
+    </div>
+    <span class="chevron">▶</span>
+  </div>
+  <div class="issue-body">
+    <div class="section-label">Explanation</div>
+    <div class="explain"><code>BUCKET_NAME = os.environ["BUCKET_NAME"]</code> raises <code>KeyError</code> at import time if the environment variable is missing. More critically, <code>client = storage.Client()</code> and <code>bucket = client.bucket(BUCKET_NAME)</code> are also executed at module level, which initiates a GCS authentication round-trip before any training code runs. A misconfigured IAM policy or network hiccup silently blocks the entire job.</div>
+    <div class="section-label">Proposed fix</div>
+    <div class="fix">Lazy-initialize the GCS client inside the functions that need it. Use <code>os.environ.get("BUCKET_NAME")</code> with a clear error message:<pre>def get_bucket():
+    name = os.environ.get("BUCKET_NAME")
+    if not name:
+        raise EnvironmentError("BUCKET_NAME env var is required")
+    return storage.Client().bucket(name)</pre></div>
+  </div>
+</div>
+
+<div class="issue" id="i17">
+  <div class="issue-header" onclick="toggle('i17')">
+    <span class="issue-num">17</span>
+    <div class="issue-title-wrap">
+      <div class="issue-title"><span class="badge badge-medium">Medium</span> &nbsp;Deprecated <code>nn.init.xavier_uniform</code> (no trailing underscore) — silent wrong behavior</div>
+      <div class="issue-loc">models.py · line 196</div>
+    </div>
+    <span class="chevron">▶</span>
+  </div>
+  <div class="issue-body">
+    <div class="section-label">Explanation</div>
+    <div class="explain"><code>nn.init.xavier_uniform(tensor)</code> (without underscore) is the deprecated form that returns a tensor but does not initialize in-place. In modern PyTorch it may be a no-op or raise a warning, leaving the cell state uninitialized (containing garbage values from the allocator). The correct call is <code>nn.init.xavier_uniform_(tensor)</code> (in-place).</div>
+    <div class="section-label">Proposed fix</div>
+    <div class="fix">This is moot once the LSTM cell parameter is removed (see Issue 4). If a learnable initial state is still desired:<pre>self.h0 = nn.Parameter(torch.zeros(nb_layers, 1, nhid))
+nn.init.xavier_uniform_(self.h0)</pre></div>
+  </div>
+</div>
+
+<!-- ── LOW ── -->
+
+<div class="issue" id="i18">
+  <div class="issue-header" onclick="toggle('i18')">
+    <span class="issue-num">18</span>
+    <div class="issue-title-wrap">
+      <div class="issue-title"><span class="badge badge-low">Low</span> &nbsp;<code>tl_base.py</code> imports non-existent function <code>generate_new_batches</code></div>
+      <div class="issue-loc">tl_base.py · line 18</div>
+    </div>
+    <span class="chevron">▶</span>
+  </div>
+  <div class="issue-body">
+    <div class="section-label">Explanation</div>
+    <div class="explain"><code>from pandemic_tgnn.code.preprocess import generate_new_batches, ...</code> — <code>generate_new_batches</code> does not exist in <code>preprocess.py</code>. This is a dead import referencing a function that was renamed to <code>generate_batches</code>. The file will fail at import time with an <code>ImportError</code>, meaning <code>tl_base.py</code> cannot be run at all in its current state.</div>
+    <div class="section-label">Proposed fix</div>
+    <div class="fix">Replace with <code>from preprocess import generate_batches</code> and update all call sites inside <code>tl_base.py</code> accordingly.</div>
+  </div>
+</div>
+
+<div class="issue" id="i19">
+  <div class="issue-header" onclick="toggle('i19')">
+    <span class="issue-num">19</span>
+    <div class="issue-title-wrap">
+      <div class="issue-title"><span class="badge badge-low">Low</span> &nbsp;Result file opened in append mode — duplicate rows accumulate across runs</div>
+      <div class="issue-loc">main.py · line 53 &nbsp;|&nbsp; metalearn.py · line 107</div>
+    </div>
+    <span class="chevron">▶</span>
+  </div>
+  <div class="issue-body">
+    <div class="section-label">Explanation</div>
+    <div class="explain"><code>open("../results/results_"+country+".csv", "a")</code> appends to existing files. Any re-run (e.g., after a cloud preemption and restart) will append duplicate rows without any deduplication. The uploaded CSVs in GCS will then contain multiple conflicting result sets.</div>
+    <div class="section-label">Proposed fix</div>
+    <div class="fix">Open in write mode <code>"w"</code> for a clean run. If resumability is needed, check which models have already been completed and skip them, rather than appending blindly.</div>
+  </div>
+</div>
+
+<div class="issue" id="i20">
+  <div class="issue-header" onclick="toggle('i20')">
+    <span class="issue-num">20</span>
+    <div class="issue-title-wrap">
+      <div class="issue-title"><span class="badge badge-low">Low</span> &nbsp;Dockerfile installs CPU-only PyTorch but code calls <code>.cuda()</code> unconditionally</div>
+      <div class="issue-loc">Dockerfile · line 14 &nbsp;|&nbsp; models.py · line 196</div>
+    </div>
+    <span class="chevron">▶</span>
+  </div>
+  <div class="issue-body">
+    <div class="section-label">Explanation</div>
+    <div class="explain">The Dockerfile pins <code>torch==2.1.0 --index-url .../cpu</code>, which has no CUDA support. The LSTM model calls <code>.cuda()</code> directly on the cell parameter. Running this container on a GPU instance will install CPU PyTorch and silently fall back to CPU, negating any GPU cost optimization. On a pure-CPU instance the <code>.cuda()</code> call will raise <code>RuntimeError: No CUDA GPUs are available</code>.</div>
+    <div class="section-label">Proposed fix</div>
+    <div class="fix">Use a CUDA base image and the correct PyTorch CUDA wheel URL for GPU instances. Replace all hardcoded <code>.cuda()</code> calls with <code>.to(device)</code> where <code>device</code> is determined at runtime.</div>
+  </div>
+</div>
+
+<div class="issue" id="i21">
+  <div class="issue-header" onclick="toggle('i21')">
+    <span class="issue-num">21</span>
+    <div class="issue-title-wrap">
+      <div class="issue-title"><span class="badge badge-info">Info</span> &nbsp;Unsafe default for <code>--recur</code>: string <code>"False"</code> is truthy</div>
+      <div class="issue-loc">main.py · line 105</div>
+    </div>
+    <span class="chevron">▶</span>
+  </div>
+  <div class="issue-body">
+    <div class="section-label">Explanation</div>
+    <div class="explain"><code>parser.add_argument('--recur', default=False, help='True or False.')</code> — when called as <code>python main.py --recur False</code>, argparse stores the string <code>"False"</code>, which is truthy. So <code>if args.recur:</code> evaluates to <code>True</code>, enabling the recurrent cell path unexpectedly. This is a classic Python CLI bug.</div>
+    <div class="section-label">Proposed fix</div>
+    <div class="fix"><pre>parser.add_argument('--recur', action='store_true', default=False)</pre></div>
+  </div>
+</div>
+
+<!-- ─────────────────────────────── TOP 10 RANKING ─────────────────────────────── -->
+<h2>Top 10 Highest-Risk Issues</h2>
+
+<table>
+  <thead><tr><th>Rank</th><th>Issue</th><th>Severity</th><th>Primary Risk</th></tr></thead>
+  <tbody>
+    <tr><td class="rank">1</td><td><code>retain_graph=True</code> GPU memory leak (Issue 2)</td><td><span class="badge badge-critical">Critical</span></td><td>OOM kill / runaway VRAM growth</td></tr>
+    <tr><td class="rank">2</td><td>Unbounded <code>while(not stop)</code> loop (Issue 1)</td><td><span class="badge badge-critical">Critical</span></td><td>Infinite GPU billing</td></tr>
+    <tr><td class="rank">3</td><td>Full model retrain per test sample — O(N²) (Issue 3)</td><td><span class="badge badge-critical">Critical</span></td><td>Extreme cloud cost × time</td></tr>
+    <tr><td class="rank">4</td><td>Early stopping broken by <code>int()</code> cast (Issue 6)</td><td><span class="badge badge-high">High</span></td><td>All 300 epochs always run; no guard</td></tr>
+    <tr><td class="rank">5</td><td>LSTM validation uses training indices (Issue 8)</td><td><span class="badge badge-high">High</span></td><td>Silent overfitting, no real early stop</td></tr>
+    <tr><td class="rank">6</td><td>LSTM cell hardcoded to CUDA + batch_size (Issue 4)</td><td><span class="badge badge-critical">Critical</span></td><td>Runtime crash + unportable</td></tr>
+    <tr><td class="rank">7</td><td>All batches GPU-allocated before training (Issue 5)</td><td><span class="badge badge-high">High</span></td><td>Peak GPU memory burst, repeated OOM</td></tr>
+    <tr><td class="rank">8</td><td>ARIMA O(regions × timesteps) model fits (Issue 9)</td><td><span class="badge badge-high">High</span></td><td>Dominates CPU wall-clock time</td></tr>
+    <tr><td class="rank">9</td><td>Dense adjacency matrix per timestep (Issue 7)</td><td><span class="badge badge-high">High</span></td><td>O(N²) memory, no sparsity benefit</td></tr>
+    <tr><td class="rank">10</td><td>Checkpoint written every improving epoch (Issue 15)</td><td><span class="badge badge-medium">Medium</span></td><td>~47 GB write amplification per run</td></tr>
+  </tbody>
+</table>
+
+<!-- ─────────────────────────────── COST RISK ─────────────────────────────── -->
+<h2>Cloud Cost Escalation Risk by Component</h2>
+<p style="font-size:13px;color:var(--text2);margin-bottom:16px;">Relative estimated contribution to GPU/CPU instance-hours per full run (all 4 countries, all models).</p>
+
+<div class="cost-bar-wrap">
+  <div class="cost-row"><span class="cost-label">Nested training loop (Issues 1,3)</span><div class="bar-track"><div class="bar-fill" style="width:82%;background:#a32d2d"></div></div><span class="cost-pct">~82%</span></div>
+  <div class="cost-row"><span class="cost-label">ARIMA per-region fitting (Issue 9)</span><div class="bar-track"><div class="bar-fill" style="width:10%;background:#854f0b"></div></div><span class="cost-pct">~10%</span></div>
+  <div class="cost-row"><span class="cost-label">Graph loading + dense adj (Issues 7,10)</span><div class="bar-track"><div class="bar-fill" style="width:4%;background:#185fa5"></div></div><span class="cost-pct">~4%</span></div>
+  <div class="cost-row"><span class="cost-label">Batch GPU allocation (Issue 5)</span><div class="bar-track"><div class="bar-fill" style="width:3%;background:#3b6d11"></div></div><span class="cost-pct">~3%</span></div>
+  <div class="cost-row"><span class="cost-label">Checkpoint writes (Issue 15)</span><div class="bar-track"><div class="bar-fill" style="width:1%;background:#888780"></div></div><span class="cost-pct">&lt;1%</span></div>
+</div>
+
+<p style="font-size:13px;color:var(--text2);margin-top:8px;"><strong>Most dangerous scenario for runaway billing:</strong> Issues 1 + 2 together — <code>retain_graph=True</code> causes OOM, which triggers a restart exception that is caught by the bare <code>except</code> in the LSTM forward pass, which suppresses the error, allowing the <code>while(not stop)</code> loop to restart indefinitely. The GPU instance keeps running and billing, the model silently produces garbage, and no alarm fires.</p>
+
+<!-- ─────────────────────────────── BOTTLENECKS ─────────────────────────────── -->
+<h2>Bottleneck &amp; Optimization Summary</h2>
+
+<h3 style="margin-top:16px;">Likely bottlenecks</h3>
+<div class="tag-row">
+  <span class="tag">Nested O(N²) training per sample</span>
+  <span class="tag">ARIMA per-region CPU fitting</span>
+  <span class="tag">iterrows() graph parsing</span>
+  <span class="tag">Pre-allocated GPU batches</span>
+  <span class="tag">Repeated checkpoint disk I/O</span>
+  <span class="tag">GCS auth at module load</span>
+</div>
+
+<h3 style="margin-top:16px;">Unsafe defaults</h3>
+<div class="tag-row">
+  <span class="tag">epochs=300 (no warm-start reduction)</span>
+  <span class="tag">early_stop=100 (broken by int cast)</span>
+  <span class="tag">--recur False (string, not bool)</span>
+  <span class="tag">BUCKET_NAME hard-fail at import</span>
+  <span class="tag">results file opened in append mode</span>
+</div>
+
+<h3 style="margin-top:16px;">Training instability risks</h3>
+<div class="tag-row">
+  <span class="tag">No gradient clipping (MPNN_LSTM)</span>
+  <span class="tag">retain_graph=True corrupts memory</span>
+  <span class="tag">LSTM val loss watching train set</span>
+  <span class="tag">Broken early stopping (int rounding)</span>
+  <span class="tag">Uninitialized cell state (xavier_uniform)</span>
+  <span class="tag">meta_lr not type-cast to float</span>
+</div>
+
+<h3 style="margin-top:16px;">Batching / caching opportunities</h3>
+<div class="tag-row">
+  <span class="tag">Warm-start checkpoints across test samples</span>
+  <span class="tag">Pre-serialize graphs to npz/pickle</span>
+  <span class="tag">Lazy batch GPU transfer</span>
+  <span class="tag">Vectorized AR(1) forecast</span>
+  <span class="tag">In-RAM best model state (no per-epoch save)</span>
+  <span class="tag">Skip completed countries on restart</span>
+</div>
+
+<p style="font-size:12px;color:var(--text2);margin-top:40px;">Report generated from: train.py, main.py, neural_utils.py, preprocess.py, models.py, metalearn.py, tl_base.py, config.json, Dockerfile, requirements.txt</p>
+
+</div>
+
+<script>
+function toggle(id) {
+  const el = document.getElementById(id);
+  el.classList.toggle('open');
+}
+</script>
+</body>
+</html>
