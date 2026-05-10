@@ -33,7 +33,7 @@ def train( adj, features, y):
     optimizer.zero_grad()
     output = model(adj, features)
     loss_train = F.mse_loss(output, y)
-    loss_train.backward(retain_graph=True)
+    loss_train.backward()
     optimizer.step()
     return output, loss_train
 
@@ -234,9 +234,18 @@ if __name__ == '__main__':
                 n_test_batches = 1 
 
                 
-                stop = False#
+                stop = False
                 stuck = False
-                while(not stop):#
+                _restart_count = 0           # Issue 1 fix: cap restarts to prevent infinite loop
+                _MAX_RESTARTS = 3
+                while(not stop):
+                    _restart_count += 1
+                    if _restart_count > _MAX_RESTARTS:
+                        print(f"WARNING: exceeded {_MAX_RESTARTS} restarts for "
+                              f"test_sample={test_sample}, shift={shift}. Forcing exit.")
+                        stop = True
+                        break
+
                     model = MPNN(nfeat=nfeat, nhid=args.hidden, nout=1, dropout=args.dropout).to(device)
                     optimizer = optim.Adam(model.parameters(), lr=args.lr)
                     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=10)
