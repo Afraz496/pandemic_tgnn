@@ -432,8 +432,88 @@ def read_meta_datasets(window, config, country_keys):
     os.chdir("../../code")
 
     return meta_labs, meta_graphs, meta_features, meta_y
-    
-    
+
+
+
+
+# --------------------------------------------------------------------------- #
+#  Single-country reader
+#
+#  read_meta_datasets always reads all four countries (Italy, Spain, England,
+#  France) via a chained os.chdir. Every country block is fully independent, so
+#  reading only the one you need produces identical results while skipping ~75%
+#  of the file I/O and the O(n_dates^2) generate_features loop for the countries
+#  you don't care about.
+# --------------------------------------------------------------------------- #
+def _read_single_country(window, config, country_keys, k):
+    """
+    Read the data for a single country given its positional index `k`
+    (0=Italy, 1=Spain, 2=England, 3=France).
+
+    Assumes the current working directory is already the country's data folder
+    (read_single_dataset handles the chdir). Mirrors the England/Britain block
+    of read_meta_datasets: no forced deletion of an 'id' column (it is dropped
+    anyway by the final labels.loc[:, dates] selection), node-then-date filtering.
+
+    Returns:
+        labels, gs_adj, features, y   for that one country.
+    """
+    labels = pd.read_csv(config['country_labels'][k])
+    if "id" in labels.columns:
+        del labels["id"]
+    labels = labels.set_index("name")
+
+    sdate = date(2020, config['country_start_month'][k], config['country_start_day'][k])
+    edate = date(2020, config['country_end_month'][k], config['country_end_day'][k])
+    delta = edate - sdate
+    dates = [sdate + timedelta(days=i) for i in range(delta.days + 1)]
+    dates = [str(d) for d in dates]
+
+    Gs = generate_graphs(dates, country_keys[k])
+
+    labels = labels.loc[list(Gs[0].nodes()), :]
+    labels = labels.loc[:, dates]
+
+    gs_adj = [nx.adjacency_matrix(kgs).toarray().T for kgs in Gs]
+    features = generate_features(Gs, labels, dates, window)
+
+    y = list()
+    for i, G in enumerate(Gs):
+        y.append(list())
+        for node in G.nodes():
+            y[i].append(labels.loc[node, dates[i]])
+
+    return labels, gs_adj, features, y
+
+
+def read_single_dataset(window, config, country_keys, country_index):
+    """
+    Read ONLY the dataset at `country_index` (e.g. England) instead of all four.
+
+    Returns the same 4-tuple shape as read_meta_datasets, but each list holds
+    exactly one element, at position 0. So in the caller use meta_labs[0],
+    meta_graphs[0], ... -- NOT meta_labs[country_index].
+
+    Notes:
+    - Like the original, this assumes it is called from the `code` directory
+      (data/ is reached via ../data), and that country_keys[country_index] is the
+      graph-file prefix while config['countries'][country_index] is the folder name.
+    - The original working directory is saved and restored in a finally block, so
+      a failure part-way through won't leave the process stranded in data/ (which
+      would break a re-run because the chdir paths are relative).
+    """
+    original_cwd = os.getcwd()
+    try:
+        os.chdir("../data")
+        os.chdir(config['countries'][country_index])
+        labels, gs_adj, features, y = _read_single_country(
+            window, config, country_keys, country_index)
+    finally:
+        os.chdir(original_cwd)
+
+    return [labels], [gs_adj], [features], [y]
+
+
 
 
 def generate_graphs(dates,country):
@@ -459,4 +539,3 @@ def generate_graphs(dates,country):
         Gs.append(G)
         
     return Gs
-

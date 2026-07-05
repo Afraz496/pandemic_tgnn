@@ -1,0 +1,46 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pandemic-tgnn-train
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      nodeSelector:
+        cloud.google.com/gke-nodepool: gpu-pool
+      tolerations:
+      - key: "nvidia.com/gpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+      containers:
+      - name: trainer
+        image: us-central1-docker.pkg.dev/gresp7/gresp/gresp:v3   # <-- CUDA build, not v1
+        imagePullPolicy: Always
+        env:
+        - name: BUCKET_NAME
+          value: "gresp7-storage"
+        - name: COUNTRY
+          value: "EN"
+        - name: MODELS
+          value: "MPNN_LSTM"      # optional; remove to run all 6 models
+        - name: EPOCHS
+          value: "300"
+        resources:
+          requests:
+            memory: "8Gi"
+            cpu: "2"
+            nvidia.com/gpu: 1
+          limits:
+            memory: "8Gi"
+            cpu: "2"
+            nvidia.com/gpu: 1
+        volumeMounts:
+        # Writable dir for trained-model checkpoints. main.py does
+        # os.makedirs("../models") == /models, which fails on the
+        # read-only root fs without this mount.
+        - name: models
+          mountPath: /models
+      volumes:
+      - name: models
+        emptyDir: {}
+      restartPolicy: Never
