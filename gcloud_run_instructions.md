@@ -161,7 +161,8 @@ gsutil cp gs://YOUR_BUCKET/predictions/<version>/run_EN.log .
 
 ---
 
-## 7. Tear down (stop billing)
+## 7. Tear down (stop billing) 
+TODO: the foloowing may not work, need to double check and manually delete the cluster if needed
 
 ```bash
 while true; do
@@ -179,6 +180,12 @@ done
 
 To stop just the GPU cost but keep the cluster:
 `gcloud container node-pools delete gpu-pool --cluster gresp-cluster --zone us-central1-b --quiet`
+
+To delete the cluster:
+`gcloud artifacts docker images delete us-central1-docker.pkg.dev/gresp7/gresp/gresp --delete-tags --quiet`
+
+To delete all images:
+`gcloud artifacts docker images delete us-central1-docker.pkg.dev/gresp7/gresp/gresp --delete-tags --quiet`
 
 ---
 
