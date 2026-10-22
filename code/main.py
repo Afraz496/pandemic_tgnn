@@ -147,7 +147,7 @@ def experiment(args, config):
                 logger.info("ARIMA done in %.1fs", time.time() - model_start)
                 continue
 
-            is_neural = model_name in ("MPNN", "MPNN_LSTM", "LSTM")
+            is_neural = model_name in ("MPNN", "MPNN_LSTM", "MPNN_LSTM_Gated", "LSTM")
 
             # ---- Predict each day until you reach `ahead` ----------------- #
             shift_range = list(range(1, args.ahead))

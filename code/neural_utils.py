@@ -8,7 +8,7 @@ import torch.optim as optim
 
 from preprocess import  AverageMeter, generate_batches, generate_batches_lstm
 
-from models import MPNN_LSTM, LSTM, MPNN
+from models import MPNN_LSTM, MPNN_LSTM_Gated, LSTM, MPNN
 import time
 
 
@@ -155,7 +155,7 @@ def run_neural_model(model: str,
         adj_test, features_test, y_test = generate_batches_lstm(n_nodes, y, [test_sample],  window, shift,  batch_size,device,test_sample)
 
 
-    elif(model=="MPNN_LSTM"):
+    elif(model in ("MPNN_LSTM", "MPNN_LSTM_Gated")):
         adj_train, features_train, y_train = generate_batches(gs_adj, features, y, idx_train, graph_window, shift, batch_size,device,test_sample)
         adj_val, features_val, y_val = generate_batches(gs_adj, features, y, idx_val, graph_window,  shift,batch_size, device,test_sample)
         adj_test, features_test, y_test = generate_batches(gs_adj, features, y,  [test_sample], graph_window,shift, batch_size, device,test_sample)
@@ -180,8 +180,9 @@ def run_neural_model(model: str,
             recur=recur,
         ).to(device)
 
-    elif model_name == "MPNN_LSTM":
-        model = MPNN_LSTM(
+    elif model_name in ("MPNN_LSTM", "MPNN_LSTM_Gated"):
+        cls = MPNN_LSTM if model_name == "MPNN_LSTM" else MPNN_LSTM_Gated
+        model = cls(
             nfeat=nfeat,
             nhid=hidden,
             nout=1,
@@ -275,6 +276,13 @@ def run_neural_model(model: str,
     #--------------- Average error per region
     error = np.sum(abs(o-l))/n_nodes
 
+    # A gated model reports how much it actually wanted the graph: ~0 means
+    # it learned to ignore neighbours entirely, which is itself the answer to
+    # "does the graph help on this dataset".
+    gate = model.graph_gate_value() if hasattr(model, "graph_gate_value") else None
+    if gate is not None:
+        print("graph_gate= {:.4f}".format(gate))
+
     #---------------- Persist the best checkpoint per (model, shift)
     if model_dir and tag:
         save_best_checkpoint(model_dir, tag, {
@@ -283,6 +291,7 @@ def run_neural_model(model: str,
             'optimizer' : optimizer.state_dict(),
             'val_loss'  : best_val_acc,
             'test_error': float(error),
+            'graph_gate': gate,
             'test_sample': test_sample,
             # Everything needed to rebuild the model for inference:
             'hparams': {
@@ -320,10 +329,11 @@ def load_checkpoint(path: str, device: torch.device = torch.device("cpu")):
     if name == "LSTM":
         model = LSTM(nfeat=hp['n_nodes'], nhid=hp['hidden'], n_nodes=hp['n_nodes'],
                      window=hp['window'], batch_size=hp['batch_size'], recur=hp['recur'])
-    elif name == "MPNN_LSTM":
-        model = MPNN_LSTM(nfeat=hp['nfeat'], nhid=hp['hidden'], nout=1,
-                          n_nodes=hp['n_nodes'], window=hp['graph_window'],
-                          dropout=hp['dropout'])
+    elif name in ("MPNN_LSTM", "MPNN_LSTM_Gated"):
+        cls = MPNN_LSTM if name == "MPNN_LSTM" else MPNN_LSTM_Gated
+        model = cls(nfeat=hp['nfeat'], nhid=hp['hidden'], nout=1,
+                    n_nodes=hp['n_nodes'], window=hp['graph_window'],
+                    dropout=hp['dropout'])
     else:
         model = MPNN(nfeat=hp['nfeat'], nhid=hp['hidden'], nout=1, dropout=hp['dropout'])
 

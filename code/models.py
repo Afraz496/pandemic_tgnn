@@ -152,6 +152,87 @@ class MPNN_LSTM(nn.Module):
 
 
 
+
+class MPNN_LSTM_Gated(MPNN_LSTM):
+    """MPNN_LSTM with a learned scalar gate on the graph pathway.
+
+    Motivation, from a controlled ablation on METR-LA: stripping the road
+    edges to self-loops *improved* accuracy at every horizon (4.001/4.302/
+    4.573 -> 3.732/4.085/4.325), on a dataset where a partial-correlation
+    screen says neighbours genuinely do carry information. So message passing
+    was a net negative even where the signal exists.
+
+    The base model cannot cheaply discard it. It concatenates the graph
+    pathway (2*nhid features, BatchNormed to non-trivial scale) with a raw
+    history skip (window*nfeat features) before fc1, so the graph half
+    dominates by dimension and cannot be driven to zero without also
+    collapsing the BatchNorm statistics.
+
+    This adds one parameter: a sigmoid gate multiplying the graph pathway,
+    initialised at sigmoid(-2) ~ 0.12 so training starts near the
+    temporal-only model and has to earn its way toward the graph. Two
+    consequences worth having:
+      * the gated model can always fall back to roughly the no-edges model,
+        so the graph can no longer make things worse than not having it;
+      * the fitted gate is readable after training, giving a per-dataset
+        measure of how much the graph was actually wanted -- a direct
+        complement to the pre-training lift screen.
+    """
+
+    def __init__(self, nfeat: int, nhid: int, nout: int, n_nodes: int,
+                 window: int, dropout: float, gate_init: float = -2.0):
+        super(MPNN_LSTM_Gated, self).__init__(
+            nfeat=nfeat, nhid=nhid, nout=nout, n_nodes=n_nodes,
+            window=window, dropout=dropout,
+        )
+        self.graph_gate = nn.Parameter(torch.tensor(float(gate_init)))
+
+    def graph_gate_value(self) -> float:
+        """Fitted gate in [0, 1]; ~0 means the graph was ignored."""
+        return float(torch.sigmoid(self.graph_gate).detach().cpu())
+
+    def forward(self, adj, x):
+        lst = list()
+        weight = adj.coalesce().values()
+        adj = adj.coalesce().indices()
+
+        skip = x.view(-1, self.window, self.n_nodes, self.nfeat)
+        skip = torch.transpose(skip, 1, 2).reshape(-1, self.window, self.nfeat)
+
+        x = self.relu(self.conv1(x, adj, edge_weight=weight))
+        x = self.bn1(x)
+        x = self.dropout(x)
+        lst.append(x)
+
+        x = self.relu(self.conv2(x, adj, edge_weight=weight))
+        x = self.bn2(x)
+        x = self.dropout(x)
+        lst.append(x)
+
+        x = torch.cat(lst, dim=1)
+
+        x = x.view(-1, self.window, self.n_nodes, x.size(1))
+        x = torch.transpose(x, 0, 1)
+        x = x.contiguous().view(self.window, -1, x.size(3))
+
+        x, (hn1, cn1) = self.rnn1(x)
+        out2, (hn2, cn2) = self.rnn2(x)
+
+        x = torch.cat([hn1[0, :, :], hn2[0, :, :]], dim=1)
+        skip = skip.reshape(skip.size(0), -1)
+
+        # The only change from MPNN_LSTM: the graph pathway is gated before
+        # it is concatenated with the raw-history skip.
+        x = torch.cat([torch.sigmoid(self.graph_gate) * x, skip], dim=1)
+
+        x = self.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = self.relu(self.fc2(x)).squeeze()
+        x = x.view(-1)
+
+        return x
+
+
 class MPNN(nn.Module):
     def __init__(self, 
                  nfeat: int , 
